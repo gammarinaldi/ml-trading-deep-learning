@@ -1,5 +1,6 @@
 # Comprehensive Requirements for ML Trading Deep Learning Project
 # Supports: Random Forest baseline, GPU models, PyTorch ensemble, and data processing
+# Optimized for Python 3.12 compatibility
 
 # ============================================================================
 # CORE DEPENDENCIES (Required for all models)
@@ -23,6 +24,8 @@ seaborn>=0.12.0
 # ============================================================================
 
 # PyTorch (Core deep learning framework)
+# Note: Install PyTorch separately with CUDA support:
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 torch>=2.0.0
 torchvision>=0.15.0
 
@@ -51,7 +54,7 @@ MetaTrader5>=5.0.37
 # Financial Data & Technical Analysis
 yfinance>=0.2.0          # Financial data source
 ta>=0.10.0               # Technical analysis indicators
-TA-Lib>=0.4.0           # Comprehensive technical analysis
+# TA-Lib>=0.4.0          # Commented out - requires manual installation on Windows
 
 # ============================================================================
 # ADVANCED DEEP LEARNING COMPONENTS
@@ -64,7 +67,7 @@ timm>=0.9.0             # PyTorch model components
 
 # Model Optimization & Metrics
 torchmetrics>=0.11.0    # Advanced metrics
-torch-tensorrt           # TensorRT optimization (NVIDIA GPUs)
+# torch-tensorrt        # Commented out - optional NVIDIA optimization
 
 # ============================================================================
 # DATA AUGMENTATION & PREPROCESSING
@@ -79,7 +82,7 @@ albumentations>=1.3.0    # Advanced augmentation techniques
 
 # Hyperparameter Optimization
 optuna>=3.2.0           # Hyperparameter tuning
-ray[tune]>=2.5.0        # Distributed tuning
+# ray[tune]>=2.5.0      # Commented out - can cause conflicts
 
 # Experiment Tracking
 wandb>=0.15.0           # Weights & Biases
@@ -117,30 +120,22 @@ omegaconf>=2.3.0        # Configuration files
 # Data Version Control
 dvc>=3.0.0              # Data version control
 
-# Parallel Processing
-multiprocessing-on-dill>=3.5.0  # Enhanced multiprocessing
-
 # ============================================================================
 # INSTALLATION INSTRUCTIONS
 # ============================================================================
 
-# Basic Installation (minimal requirements):
-# pip install pandas numpy scikit-learn torch torchvision onnx onnxruntime
+# Step 1: Install PyTorch with CUDA support (if you have NVIDIA GPU):
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 
-# GPU Installation (recommended):
-# 1. Install PyTorch with CUDA:
-#    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-# 2. Install all requirements:
-#    pip install -r requirements.txt
-
-# Full Installation (all features):
+# Step 2: Install core requirements:
 # pip install -r requirements.txt
 
-# NVIDIA RAPIDS (Advanced GPU acceleration - conda only):
-# conda install -c rapidsai -c nvidia -c conda-forge cuml=23.06 python=3.10 cudatoolkit=11.8
+# Step 3: Optional - Install TA-Lib manually (Windows):
+# Download from: https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib
+# pip install TA_Lib-0.4.24-cp312-cp312-win_amd64.whl
 
 # Notes:
 # - Some packages may require specific CUDA versions
-# - TA-Lib may require manual installation on Windows
+# - TA-Lib requires manual installation on Windows
 # - For trading: Only MetaTrader5 is required for live data
 # - For development: All packages provide maximum functionality

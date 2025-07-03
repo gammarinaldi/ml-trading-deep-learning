@@ -22,28 +22,21 @@ This project features a comprehensive machine learning framework for forex price
 deep-learning/
 ├── Core Models
 │   ├── market_direction_deep_learning.py    # 🏆 MAIN MODEL (Deep Learning Ensemble)
-│   ├── improved_directional_model.py        # 🔥 Enhanced Random Forest + XGBoost
-│   └── pytorch_rtx3060_model.py            # 🌟 PyTorch deep learning model
+│   └── merge_eurusd_data.py                # 🔧 Data preprocessing utility
 │
 ├── Testing & Backtesting
 │   ├── backtest.py                          # 🎯 Complete trading system backtester
 │   ├── test_deep_learning_model.py          # 🧪 Deep learning model testing
-│   ├── test_improved_model.py               # 🧪 Traditional ML model testing
 │   └── test_gpu.py                          # 🔍 GPU performance testing
 │
-├── Data Processing
-│   └── merge_eurusd_data.py                # 🔧 Data preprocessing utility
-│
-├── MetaTrader Integration
-│   └── deep_learning.mq5                    # 📈 Expert Advisor for MT5
+├── Data Files
+│   ├── EURUSDm_H1_201801020600_202412310000.csv  # 📊 H1 timeframe data
+│   └── EURUSD_M1_2000_2024_merged.csv            # 📊 M1 timeframe data
 │
 ├── Models & Data
 │   └── models/                              # 💾 Saved models and metadata
 │       ├── ensemble_model_*.pkl             # 🎯 Deep learning ensemble models
 │       ├── ensemble_model_info_*.json       # 📊 Comprehensive model metadata
-│       ├── direction_classifier.pkl         # 🎯 Binary direction classifier
-│       ├── price_regressor.pkl             # 📈 Price prediction model
-│       ├── advanced_forex_model.onnx       # 🔄 ONNX export for MT5
 │       └── *.pth, *.json                   # 💾 Various saved models
 │
 ├── Configuration
@@ -150,14 +143,14 @@ Deep Learning Ensemble:
 - Error analysis and reporting
 - GPU performance validation
 
-### `test_improved_model.py` - Traditional ML Testing
-**Testing suite for Random Forest and XGBoost models**
+### `test_gpu.py` - GPU Performance Testing
+**GPU availability and performance validation**
 
 **Features:**
-- Model loading and validation
-- Performance metric calculation
-- Sample prediction testing
-- Error analysis and reporting
+- CUDA availability check
+- GPU memory testing
+- PyTorch GPU operations validation
+- Performance benchmarking
 
 ## 🚀 Getting Started
 
@@ -165,52 +158,81 @@ Deep Learning Ensemble:
 
 1. **Install dependencies**:
    ```bash
+   # For full features with GPU support
    pip install -r requirements.txt
+   
+   # For basic functionality (CPU only)
+   pip install -r requirements_basic.txt
    ```
 
-2. **Prepare data**: Ensure you have `EURUSDm_H1_201801020600_202412310000.csv`
+2. **Install PyTorch with CUDA support** (for GPU acceleration):
+   ```bash
+   # For CUDA 11.8
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+   
+   # For CUDA 12.1
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+   ```
 
-3. **Train the deep learning ensemble**:
+3. **Verify GPU setup**:
+   ```bash
+   python test_gpu.py
+   ```
+
+4. **Prepare data**: Ensure you have `EURUSDm_H1_201801020600_202412310000.csv`
+
+5. **Train the deep learning ensemble**:
    ```bash
    python market_direction_deep_learning.py
    ```
 
-4. **Run comprehensive backtesting**:
+6. **Run comprehensive backtesting**:
    ```bash
    python backtest.py
    ```
 
-5. **Test the models**:
+7. **Test the models**:
    ```bash
    python test_deep_learning_model.py
    ```
 
-6. **Check results**: 
+8. **Check results**: 
    - Models saved in `models/` folder with timestamps
    - Performance visualizations: `backtest_performance_analysis.png`
    - Optimized system results: `optimized_system_performance_analysis.png`
 
+### Installation Options
+
+#### **Full Installation** (`requirements.txt`)
+**Complete features with GPU support**:
+- PyTorch with CUDA support
+- XGBoost with GPU acceleration
+- scikit-learn for traditional ML
+- pandas, numpy for data processing
+- matplotlib, seaborn for visualization
+- ONNX for MetaTrader integration
+- Advanced ML libraries (transformers, optuna, wandb)
+
+#### **Minimal Installation** (`requirements_basic.txt`)
+**Essential dependencies only**:
+- scikit-learn
+- pandas, numpy
+- matplotlib
+- XGBoost (CPU fallback)
+- Basic ONNX support
+
 ### GPU Setup (Required for Deep Learning)
 
-**Install CUDA-enabled PyTorch**:
-```bash
-# For CUDA 11.8
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-# For CUDA 12.1
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-```
-
-**Verify GPU availability**:
+**Verify CUDA installation**:
 ```bash
 python test_gpu.py
 ```
 
-### Traditional ML Models (CPU Only)
-
-**For Random Forest + XGBoost models**:
-```bash
-python improved_directional_model.py
+**Expected output for RTX 3060**:
+```
+🎮 GPU Ready: NVIDIA GeForce RTX 3060 (12.0 GB)
+✅ CUDA available: True
+✅ PyTorch GPU operations working
 ```
 
 ## 📊 Model Performance
@@ -324,7 +346,7 @@ Maximum Drawdown: 8.45%
 - pandas, numpy for data processing
 - matplotlib, seaborn for visualization
 - ONNX for MetaTrader integration
-- tqdm for progress tracking
+- Advanced ML libraries (transformers, optuna, wandb)
 
 ### Minimal Installation (`requirements_basic.txt`)
 **Essential dependencies only**:
@@ -407,6 +429,17 @@ final_balance, trade_count = backtester.run_backtest(
 - **Memory Management**: Efficient GPU memory usage
 - **Mixed Precision**: Automatic mixed precision training
 - **Gradient Accumulation**: Effective batch size optimization
+
+## 📁 Data Files
+
+### Available Datasets
+- **`EURUSDm_H1_201801020600_202412310000.csv`**: H1 timeframe data (2018-2024)
+- **`EURUSD_M1_2000_2024_merged.csv`**: M1 timeframe data (2000-2024)
+
+### Data Format
+- **Timeframe**: H1 (1-hour) and M1 (1-minute)
+- **Columns**: timestamp, open, high, low, close, volume
+- **Period**: 2018-2024 (H1), 2000-2024 (M1)
 
 ## 🚀 Future Enhancements
 

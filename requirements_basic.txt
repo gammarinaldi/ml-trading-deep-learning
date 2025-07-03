@@ -1,0 +1,33 @@
+# Minimal Requirements for Basic ML Trading Functionality
+# Core dependencies only - no GPU acceleration or advanced features
+
+# Data Processing & Analysis
+pandas>=1.5.0
+numpy>=1.24.0
+tqdm>=4.65.0
+
+# Traditional Machine Learning
+scikit-learn>=1.3.0
+joblib>=1.3.0
+
+# Visualization
+matplotlib>=3.6.0
+seaborn>=0.12.0
+
+# Basic ML Models (CPU only)
+xgboost>=1.7.0
+
+# Model Export
+onnx>=1.14.0
+onnxruntime>=1.15.0
+skl2onnx>=1.11.0
+
+# Financial Data
+yfinance>=0.2.0
+ta>=0.10.0
+
+# MetaTrader Integration
+MetaTrader5>=5.0.37
+
+# Installation:
+# pip install -r requirements_basic.txt 
