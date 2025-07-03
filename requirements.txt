@@ -1,0 +1,146 @@
+# Comprehensive Requirements for ML Trading Deep Learning Project
+# Supports: Random Forest baseline, GPU models, PyTorch ensemble, and data processing
+
+# ============================================================================
+# CORE DEPENDENCIES (Required for all models)
+# ============================================================================
+
+# Data Processing & Analysis
+pandas>=1.5.0
+numpy>=1.24.0
+tqdm>=4.65.0
+
+# Traditional Machine Learning
+scikit-learn>=1.3.0
+joblib>=1.3.0
+
+# Visualization
+matplotlib>=3.6.0
+seaborn>=0.12.0
+
+# ============================================================================
+# DEEP LEARNING & GPU ACCELERATION
+# ============================================================================
+
+# PyTorch (Core deep learning framework)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Advanced ML Models
+xgboost>=1.7.0          # GPU-accelerated gradient boosting
+lightgbm>=3.3.0         # Alternative gradient boosting
+catboost>=1.2.0         # Another gradient boosting option
+
+# ============================================================================
+# MODEL EXPORT & DEPLOYMENT
+# ============================================================================
+
+# ONNX (MetaTrader 5 integration)
+onnx>=1.14.0
+onnxruntime>=1.15.0
+onnxruntime-gpu>=1.15.0  # GPU inference acceleration
+skl2onnx>=1.11.0         # sklearn to ONNX conversion
+
+# ============================================================================
+# TRADING & FINANCIAL DATA
+# ============================================================================
+
+# MetaTrader 5 Integration
+MetaTrader5>=5.0.37
+
+# Financial Data & Technical Analysis
+yfinance>=0.2.0          # Financial data source
+ta>=0.10.0               # Technical analysis indicators
+TA-Lib>=0.4.0           # Comprehensive technical analysis
+
+# ============================================================================
+# ADVANCED DEEP LEARNING COMPONENTS
+# ============================================================================
+
+# Transformer Architectures
+transformers>=4.30.0     # Hugging Face transformers
+einops>=0.6.0           # Tensor operations
+timm>=0.9.0             # PyTorch model components
+
+# Model Optimization & Metrics
+torchmetrics>=0.11.0    # Advanced metrics
+torch-tensorrt           # TensorRT optimization (NVIDIA GPUs)
+
+# ============================================================================
+# DATA AUGMENTATION & PREPROCESSING
+# ============================================================================
+
+# Data Augmentation
+albumentations>=1.3.0    # Advanced augmentation techniques
+
+# ============================================================================
+# EXPERIMENTATION & MONITORING
+# ============================================================================
+
+# Hyperparameter Optimization
+optuna>=3.2.0           # Hyperparameter tuning
+ray[tune]>=2.5.0        # Distributed tuning
+
+# Experiment Tracking
+wandb>=0.15.0           # Weights & Biases
+tensorboard>=2.13.0     # TensorBoard integration
+mlflow>=2.4.0           # Model lifecycle management
+
+# Visualization Enhancement
+plotly>=5.15.0          # Interactive plots
+
+# ============================================================================
+# SYSTEM MONITORING & OPTIMIZATION
+# ============================================================================
+
+# System Monitoring
+psutil>=5.9.0           # System resource monitoring
+memory-profiler>=0.60.0 # Memory usage tracking
+
+# ============================================================================
+# MODEL SERVING & API (Optional for production)
+# ============================================================================
+
+# Web API Framework
+fastapi>=0.100.0        # API serving
+uvicorn>=0.22.0         # ASGI server
+pydantic>=2.0.0         # Data validation
+
+# ============================================================================
+# CONFIGURATION & DATA MANAGEMENT
+# ============================================================================
+
+# Configuration Management
+hydra-core>=1.3.0       # Configuration management
+omegaconf>=2.3.0        # Configuration files
+
+# Data Version Control
+dvc>=3.0.0              # Data version control
+
+# Parallel Processing
+multiprocessing-on-dill>=3.5.0  # Enhanced multiprocessing
+
+# ============================================================================
+# INSTALLATION INSTRUCTIONS
+# ============================================================================
+
+# Basic Installation (minimal requirements):
+# pip install pandas numpy scikit-learn torch torchvision onnx onnxruntime
+
+# GPU Installation (recommended):
+# 1. Install PyTorch with CUDA:
+#    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+# 2. Install all requirements:
+#    pip install -r requirements.txt
+
+# Full Installation (all features):
+# pip install -r requirements.txt
+
+# NVIDIA RAPIDS (Advanced GPU acceleration - conda only):
+# conda install -c rapidsai -c nvidia -c conda-forge cuml=23.06 python=3.10 cudatoolkit=11.8
+
+# Notes:
+# - Some packages may require specific CUDA versions
+# - TA-Lib may require manual installation on Windows
+# - For trading: Only MetaTrader5 is required for live data
+# - For development: All packages provide maximum functionality
