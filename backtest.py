@@ -22,7 +22,8 @@ class Backtester:
     Minimal backtesting system to identify and fix the signal generation issue
     """
     
-    def __init__(self, model_path='models/unified_price_regressor.pkl', initial_capital=1000):
+    def __init__(self, model_path='models/best_model_20250703_105700.onnx', initial_capital=1000, verbose=True):
+        self.verbose_loading = verbose
         self.model = self.load_model(model_path)
         self.initial_capital = initial_capital
         
@@ -42,9 +43,22 @@ class Backtester:
         
     def load_model(self, model_path):
         if os.path.exists(model_path):
-            model = joblib.load(model_path)
-            print(f"✅ Model loaded successfully")
-            return model
+            import onnxruntime as ort
+            import json
+            
+            # Load ONNX model
+            session = ort.InferenceSession(model_path)
+            
+            # Load model info
+            json_path = model_path.replace('.onnx', '.json').replace('best_model_', 'ensemble_model_info_')
+            model_info = None
+            if os.path.exists(json_path):
+                with open(json_path, 'r') as f:
+                    model_info = json.load(f)
+            
+            if hasattr(self, 'verbose_loading') and self.verbose_loading:
+                print(f"✅ ONNX model loaded successfully")
+            return {'session': session, 'info': model_info}
         else:
             raise FileNotFoundError(f"❌ Model not found at {model_path}")
     
@@ -78,84 +92,192 @@ class Backtester:
     
 
     
-    def add_technical_indicators(self, df, price_col='close'):
-        """Add minimal required technical indicators"""
-        df['sma_5'] = df[price_col].rolling(window=5).mean()
-        df['sma_10'] = df[price_col].rolling(window=10).mean()
-        df['sma_20'] = df[price_col].rolling(window=20).mean()
-        df['sma_50'] = df[price_col].rolling(window=50).mean()
-        
-        df['ema_5'] = df[price_col].ewm(span=5).mean()
-        df['ema_10'] = df[price_col].ewm(span=10).mean()
-        df['ema_20'] = df[price_col].ewm(span=20).mean()
-        
-        df['price_vs_sma5'] = df[price_col] / df['sma_5'] - 1
-        df['price_vs_sma10'] = df[price_col] / df['sma_10'] - 1
-        df['price_vs_sma20'] = df[price_col] / df['sma_20'] - 1
-        
-        df['sma5_vs_sma10'] = df['sma_5'] / df['sma_10'] - 1
-        df['sma10_vs_sma20'] = df['sma_10'] / df['sma_20'] - 1
-        
-        df['returns'] = df[price_col].pct_change()
-        df['volatility_5'] = df['returns'].rolling(window=5).std()
-        df['volatility_10'] = df['returns'].rolling(window=10).std()
-        df['volatility_20'] = df[price_col].rolling(window=20).std()
-        
-        df['momentum_3'] = df[price_col] / df[price_col].shift(3) - 1
-        df['momentum_5'] = df[price_col] / df[price_col].shift(5) - 1
-        df['momentum_10'] = df[price_col] / df[price_col].shift(10) - 1
-        
-        df['roc_5'] = df[price_col].pct_change(5)
-        df['roc_10'] = df[price_col].pct_change(10)
-        
-        # Bollinger Bands
-        df['bb_middle'] = df[price_col].rolling(window=20).mean()
-        bb_std = df[price_col].rolling(window=20).std()
-        df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
-        df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
-        df['bb_position'] = (df[price_col] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
-        
-        # RSI
-        delta = df[price_col].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        df['rsi'] = 100 - (100 / (1 + rs))
-        
-        df['high_5'] = df[price_col].rolling(window=5).max()
-        df['low_5'] = df[price_col].rolling(window=5).min()
-        df['high_10'] = df[price_col].rolling(window=10).max()
-        df['low_10'] = df[price_col].rolling(window=10).min()
-        
-        df['dist_from_high5'] = (df['high_5'] - df[price_col]) / df[price_col]
-        df['dist_from_low5'] = (df[price_col] - df['low_5']) / df[price_col]
-        
-        # Calculate ATR for dynamic risk management
-        df = self.calculate_atr(df, self.atr_period)
-        
-        return df
+    def add_comprehensive_features(self, df, price_col='close'):
+        """Add comprehensive technical indicators matching the training data exactly"""
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=pd.errors.PerformanceWarning)
+            
+            # === ORIGINAL FEATURES (keep existing) ===
+            # Moving averages
+            for period in [5, 10, 20, 50]:
+                df[f'sma_{period}'] = df[price_col].rolling(window=period).mean()
+                df[f'ema_{period}'] = df[price_col].ewm(span=period).mean()
+                df[f'price_vs_sma{period}'] = df[price_col] / df[f'sma_{period}']
+            
+            # === NEW HIGH-IMPACT FEATURES ===
+            
+            # 1. ADVANCED MOMENTUM INDICATORS
+            # Multiple timeframe momentum
+            for period in [3, 7, 14, 21, 50]:
+                df[f'momentum_{period}'] = df[price_col].pct_change(period) * 100
+                df[f'roc_{period}'] = ((df[price_col] / df[price_col].shift(period)) - 1) * 100
+                
+                # Momentum acceleration (second derivative)
+                df[f'momentum_accel_{period}'] = df[f'momentum_{period}'].diff()
+                
+                # Momentum divergence
+                df[f'momentum_divergence_{period}'] = df[f'momentum_{period}'] - df[f'momentum_{period}'].rolling(5).mean()
+            
+            # 2. VOLATILITY REGIME DETECTION
+            # Multiple volatility measures
+            df['returns'] = df[price_col].pct_change()
+            for window in [10, 20, 50]:
+                # Standard volatility
+                df[f'volatility_{window}'] = df['returns'].rolling(window).std() * 100
+                
+                # Realized volatility (sum of squared returns)
+                df[f'realized_vol_{window}'] = (df['returns'] ** 2).rolling(window).sum() * 100
+                
+                # Volatility of volatility (volatility clustering)
+                df[f'vol_of_vol_{window}'] = df[f'volatility_{window}'].rolling(window).std()
+                
+                # Volatility percentile (regime detection)
+                df[f'vol_percentile_{window}'] = df[f'volatility_{window}'].rolling(window*2).rank(pct=True)
+            
+            # 3. ADVANCED PRICE ACTION PATTERNS
+            # Higher highs, lower lows detection
+            for window in [5, 10, 20]:
+                rolling_max = df[price_col].rolling(window).max()
+                rolling_min = df[price_col].rolling(window).min()
+                
+                df[f'higher_high_{window}'] = (rolling_max > rolling_max.shift(1)).astype(int)
+                df[f'lower_low_{window}'] = (rolling_min < rolling_min.shift(1)).astype(int)
+                
+                # Price position within range
+                df[f'price_position_{window}'] = (df[price_col] - rolling_min) / (rolling_max - rolling_min)
+                
+                # Breakout detection
+                df[f'upper_breakout_{window}'] = (df[price_col] > rolling_max.shift(1)).astype(int)
+                df[f'lower_breakout_{window}'] = (df[price_col] < rolling_min.shift(1)).astype(int)
+            
+            # 4. SOPHISTICATED OSCILLATORS
+            # Advanced RSI variations
+            delta = df[price_col].diff()
+            for rsi_period in [9, 14, 21]:
+                gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
+                rs = gain / loss
+                df[f'rsi_{rsi_period}'] = 100 - (100 / (1 + rs))
+                
+                # RSI momentum
+                df[f'rsi_momentum_{rsi_period}'] = df[f'rsi_{rsi_period}'].diff()
+                
+                # RSI mean reversion signal
+                df[f'rsi_mean_reversion_{rsi_period}'] = (df[f'rsi_{rsi_period}'] - 50) / 50
+            
+            # 5. MULTI-TIMEFRAME TREND ANALYSIS
+            # Trend strength across different timeframes
+            for ma_fast, ma_slow in [(5, 10), (10, 20), (20, 50)]:
+                df[f'trend_{ma_fast}_{ma_slow}'] = df[f'sma_{ma_fast}'] - df[f'sma_{ma_slow}']
+                df[f'trend_strength_{ma_fast}_{ma_slow}'] = df[f'trend_{ma_fast}_{ma_slow}'] / df[price_col]
+                
+                # Trend acceleration
+                df[f'trend_accel_{ma_fast}_{ma_slow}'] = df[f'trend_{ma_fast}_{ma_slow}'].diff()
+            
+            # 6. VOLUME-PRICE ANALYSIS (simulated volume based on volatility)
+            # Create synthetic volume based on price movements
+            df['synthetic_volume'] = abs(df['returns']) * 1000000  # Simulate volume
+            
+            for period in [10, 20]:
+                # Volume-weighted average price approximation
+                df[f'vwap_approx_{period}'] = (df[price_col] * df['synthetic_volume']).rolling(period).sum() / df['synthetic_volume'].rolling(period).sum()
+                
+                # Volume-price trend
+                df[f'vpt_{period}'] = (df['returns'] * df['synthetic_volume']).rolling(period).sum()
+            
+            # 7. FIBONACCI AND SUPPORT/RESISTANCE LEVELS
+            for period in [20, 50]:
+                high = df[price_col].rolling(period).max()
+                low = df[price_col].rolling(period).min()
+                range_val = high - low
+                
+                # Fibonacci retracement levels
+                df[f'fib_23.6_{period}'] = high - 0.236 * range_val
+                df[f'fib_38.2_{period}'] = high - 0.382 * range_val
+                df[f'fib_50.0_{period}'] = high - 0.500 * range_val
+                df[f'fib_61.8_{period}'] = high - 0.618 * range_val
+                
+                # Distance to Fibonacci levels
+                for fib_level in [23.6, 38.2, 50.0, 61.8]:
+                    fib_col = f'fib_{fib_level}_{period}'
+                    df[f'dist_to_{fib_col}'] = abs(df[price_col] - df[fib_col]) / range_val
+            
+            # 8. MARKET MICROSTRUCTURE FEATURES
+            # Bid-ask spread simulation and price impact
+            df['spread_simulation'] = df['volatility_10'] * 0.001  # Simulate spread
+            df['price_impact'] = abs(df['returns']) / df['spread_simulation']
+            
+            # Tick direction and momentum
+            df['tick_direction'] = np.sign(df['returns'])
+            for window in [5, 10]:
+                df[f'tick_momentum_{window}'] = df['tick_direction'].rolling(window).sum()
+            
+            # 9. SEASONAL AND CYCLICAL PATTERNS
+            # Hour of day effects (if datetime available)
+            if hasattr(df.index, 'hour'):
+                df['hour'] = df.index.hour
+                df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
+                df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+            
+            # Day of week effects
+            if hasattr(df.index, 'dayofweek'):
+                df['dayofweek'] = df.index.dayofweek
+                df['dow_sin'] = np.sin(2 * np.pi * df['dayofweek'] / 7)
+                df['dow_cos'] = np.cos(2 * np.pi * df['dayofweek'] / 7)
+            
+            # 10. REGIME CHANGE DETECTION
+            # Volatility regime changes
+            vol_20 = df['volatility_20']
+            df['vol_regime_change'] = (vol_20 > vol_20.quantile(0.8)).astype(int)
+            
+            # Trend regime changes
+            if 'trend_20_50' in df.columns:
+                trend_signal = df['trend_20_50']
+            else:
+                trend_signal = df['sma_20'] - df['sma_50']
+            df['trend_regime'] = np.where(trend_signal > 0, 1, -1)
+            df['trend_regime_change'] = (df['trend_regime'] != df['trend_regime'].shift(1)).astype(int)
+            
+            # Calculate ATR for dynamic risk management
+            df = self.calculate_atr(df, self.atr_period)
+            
+            # Defragment DataFrame to eliminate performance warnings
+            df = df.copy()
+            
+            return df
     
     def predict_price_and_direction(self, recent_data, feature_cols, n_steps=100):
-        """Make prediction - debug version"""
+        """Make prediction using ONNX model"""
         if len(recent_data) < n_steps:
             return None, None, 0.0
         
         try:
+            # Get the last n_steps of features
             features = recent_data[feature_cols].iloc[-n_steps:].values.flatten()
-            features = features.reshape(1, -1)
+            features = features.reshape(1, -1).astype(np.float32)
             
             # Check for NaN values
             if np.isnan(features).any():
                 return None, None, 0.0
             
-            price_pred = self.model.predict(features)[0]
+            # Make prediction with ONNX
+            session = self.model['session']
+            input_name = session.get_inputs()[0].name
+            output_names = [output.name for output in session.get_outputs()]
+            
+            outputs = session.run(output_names, {input_name: features})
+            
+            # Get direction prediction (first output)
+            direction_output = outputs[0]
+            direction_proba = np.exp(direction_output) / np.sum(np.exp(direction_output), axis=1, keepdims=True)
+            direction_pred = np.argmax(direction_output, axis=1)[0]
+            confidence = np.max(direction_proba[0])
+            
+            # For price prediction, use current price (since we're focused on direction)
             current_price = recent_data['close'].iloc[-1]
-            price_change = (price_pred - current_price) / current_price
             
-            direction_pred = 1 if price_change > 0 else 0
-            confidence = abs(price_change)
-            
-            return direction_pred, price_pred, confidence
+            return direction_pred, current_price, confidence
         except Exception as e:
             print(f"  Prediction error: {e}")
             return None, None, 0.0
@@ -592,21 +714,28 @@ Period: {metrics.get('years', 0):.2f} years
         
         print(f"📈 Detailed equity curve saved: {filename}")
     
-    def run_backtest(self, data, n_steps=100, start_date=None, debug_mode=True):
+    def run_backtest(self, data, n_steps=100, start_date=None, debug_mode=True, generate_plots=True):
         """Run backtest with enhanced performance tracking"""
         data = data.copy()
-        data = self.add_technical_indicators(data, 'close')
+        data = self.add_comprehensive_features(data, 'close')
         data = data.dropna()
         
         if start_date:
             data = data[data.index >= start_date]
         
-        print(f"📊 Backtesting period: {data.index[0]} to {data.index[-1]}")
-        print(f"📈 Total periods: {len(data)}")
+        # Only show detailed progress if not in optimization mode (when plots are disabled)
+        show_progress = generate_plots or debug_mode
         
-        # Exclude ATR from model features - it's only for risk management
-        feature_cols = [col for col in data.columns if col not in ['close', 'atr', 'high', 'low']]
-        print(f"📊 Features for ML model: {len(feature_cols)} (excluding ATR risk management indicator)")
+        if show_progress:
+            print(f"📊 Backtesting period: {data.index[0]} to {data.index[-1]}")
+            print(f"📈 Total periods: {len(data)}")
+            
+            # Exclude ATR from model features - it's only for risk management
+            feature_cols = [col for col in data.columns if col not in ['close', 'atr', 'high', 'low']]
+            print(f"📊 Features for ML model: {len(feature_cols)} (excluding ATR risk management indicator)")
+        else:
+            # Still need to calculate feature columns for optimization
+            feature_cols = [col for col in data.columns if col not in ['close', 'atr', 'high', 'low']]
         
         account_balance = self.initial_capital
         self.trades = []
@@ -620,9 +749,11 @@ Period: {metrics.get('years', 0):.2f} years
         # Test periods - full dataset when not debugging
         test_periods = min(1000, len(data) - n_steps) if debug_mode else len(data) - n_steps
         
-        print(f"🔍 Testing {test_periods} periods...")
+        if show_progress:
+            print(f"🔍 Testing {test_periods} periods...")
         
-        with tqdm(total=test_periods, desc="Backtesting", unit="periods") as pbar:
+        pbar = tqdm(total=test_periods, desc="Backtesting", unit="periods", disable=not show_progress)
+        with pbar:
             for i in range(n_steps, n_steps + test_periods):
                 current_timestamp = data.index[i]
                 current_price = data['close'].iloc[i]
@@ -735,21 +866,22 @@ Period: {metrics.get('years', 0):.2f} years
         
         closed_trades = [t for t in self.trades if t['status'] == 'CLOSED']
         
-        print(f"✅ Backtest completed!")
-        print(f"📊 Total signals: {total_signals}")
-        print(f"📊 Valid predictions: {valid_predictions}")
-        print(f"📊 Confidence above threshold: {confidence_above_threshold}")
-        print(f"📈 Executed trades: {len(closed_trades)}")
-        
-        # Calculate prediction success rates
-        prediction_success_rate = (valid_predictions / total_signals * 100) if total_signals > 0 else 0
-        confidence_rate = (confidence_above_threshold / valid_predictions * 100) if valid_predictions > 0 else 0
-        execution_rate = (len(closed_trades) / confidence_above_threshold * 100) if confidence_above_threshold > 0 else 0
-        
-        print(f"\n📈 PREDICTION ANALYSIS:")
-        print(f"  🎯 Prediction success rate: {prediction_success_rate:.1f}% ({valid_predictions}/{total_signals})")
-        print(f"  💪 High confidence rate: {confidence_rate:.1f}% ({confidence_above_threshold}/{valid_predictions})")  
-        print(f"  🚀 Trade execution rate: {execution_rate:.1f}% ({len(closed_trades)}/{confidence_above_threshold})")
+        if show_progress:
+            print(f"✅ Backtest completed!")
+            print(f"📊 Total signals: {total_signals}")
+            print(f"📊 Valid predictions: {valid_predictions}")
+            print(f"📊 Confidence above threshold: {confidence_above_threshold}")
+            print(f"📈 Executed trades: {len(closed_trades)}")
+            
+            # Calculate prediction success rates
+            prediction_success_rate = (valid_predictions / total_signals * 100) if total_signals > 0 else 0
+            confidence_rate = (confidence_above_threshold / valid_predictions * 100) if valid_predictions > 0 else 0
+            execution_rate = (len(closed_trades) / confidence_above_threshold * 100) if confidence_above_threshold > 0 else 0
+            
+            print(f"\n📈 PREDICTION ANALYSIS:")
+            print(f"  🎯 Prediction success rate: {prediction_success_rate:.1f}% ({valid_predictions}/{total_signals})")
+            print(f"  💪 High confidence rate: {confidence_rate:.1f}% ({confidence_above_threshold}/{valid_predictions})")  
+            print(f"  🚀 Trade execution rate: {execution_rate:.1f}% ({len(closed_trades)}/{confidence_above_threshold})")
         
         # Calculate performance metrics
         performance_metrics = self.calculate_performance_metrics(self.equity_curve)
@@ -769,32 +901,33 @@ Period: {metrics.get('years', 0):.2f} years
         
         end_time = time.time()
         
-        print("\n" + "="*70)
-        print("                    BACKTESTING RESULTS")
-        print("="*70)
-        print(f"Period: {data.index[0]} to {data.index[-1]}")
-        print(f"Initial Capital: ${self.initial_capital:,.2f}")
-        print(f"Final Balance: ${account_balance:,.2f}")
-        print(f"Total Return: {performance_metrics.get('total_return', 0)*100:.2f}%")
-        print(f"CAGR: {performance_metrics.get('cagr', 0)*100:.2f}%")
-        print(f"Sharpe Ratio: {performance_metrics.get('sharpe_ratio', 0):.2f}")
-        print(f"Max Drawdown: {performance_metrics.get('max_drawdown', 0)*100:.2f}%")
-        print(f"Volatility: {performance_metrics.get('volatility', 0)*100:.2f}%")
+        if show_progress:
+            print("\n" + "="*70)
+            print("                    BACKTESTING RESULTS")
+            print("="*70)
+            print(f"Period: {data.index[0]} to {data.index[-1]}")
+            print(f"Initial Capital: ${self.initial_capital:,.2f}")
+            print(f"Final Balance: ${account_balance:,.2f}")
+            print(f"Total Return: {performance_metrics.get('total_return', 0)*100:.2f}%")
+            print(f"CAGR: {performance_metrics.get('cagr', 0)*100:.2f}%")
+            print(f"Sharpe Ratio: {performance_metrics.get('sharpe_ratio', 0):.2f}")
+            print(f"Max Drawdown: {performance_metrics.get('max_drawdown', 0)*100:.2f}%")
+            print(f"Volatility: {performance_metrics.get('volatility', 0)*100:.2f}%")
+            
+            print("\nTRADE ANALYSIS:")
+            print(f"Total Trades: {len(closed_trades)}")
+            print(f"Winning Trades: {len(winning_trades)} ({win_rate:.1f}%)")
+            print(f"Losing Trades: {len(losing_trades)} ({100-win_rate:.1f}%)")
+            print(f"Average Win: ${avg_win:.2f}")
+            print(f"Average Loss: ${avg_loss:.2f}")
+            print(f"Profit Factor: {profit_factor:.2f}")
+            
+            print("\nCONSECUTIVE TRADES:")
+            print(f"Max Consecutive Wins: {consecutive_stats['max_consecutive_wins']}")
+            print(f"Max Consecutive Losses: {consecutive_stats['max_consecutive_losses']}")
         
-        print("\nTRADE ANALYSIS:")
-        print(f"Total Trades: {len(closed_trades)}")
-        print(f"Winning Trades: {len(winning_trades)} ({win_rate:.1f}%)")
-        print(f"Losing Trades: {len(losing_trades)} ({100-win_rate:.1f}%)")
-        print(f"Average Win: ${avg_win:.2f}")
-        print(f"Average Loss: ${avg_loss:.2f}")
-        print(f"Profit Factor: {profit_factor:.2f}")
-        
-        print("\nCONSECUTIVE TRADES:")
-        print(f"Max Consecutive Wins: {consecutive_stats['max_consecutive_wins']}")
-        print(f"Max Consecutive Losses: {consecutive_stats['max_consecutive_losses']}")
-        
-        # Generate performance plots with updated metrics
-        if len(self.equity_curve) > 0:
+        # Generate performance plots with updated metrics (only if requested)
+        if len(self.equity_curve) > 0 and generate_plots:
             self.plot_performance_analysis(self.equity_curve, self.trades, "default_system")
         
         return account_balance, len(closed_trades)
@@ -804,7 +937,7 @@ class ParameterOptimizer:
     Parameter optimization system for finding optimal trading parameters
     """
     
-    def __init__(self, data, model_path='models/unified_price_regressor.pkl', initial_capital=1000):
+    def __init__(self, data, model_path='models/best_model_20250703_105700.onnx', initial_capital=1000):
         self.data = data
         self.model_path = model_path
         self.initial_capital = initial_capital
@@ -863,8 +996,8 @@ class ParameterOptimizer:
     def run_single_optimization(self, params, test_subset=True):
         """Run backtest with specific parameter set"""
         try:
-            # Create backtester with custom parameters
-            backtester = Backtester(self.model_path, self.initial_capital)
+            # Create backtester with custom parameters (non-verbose for optimization)
+            backtester = Backtester(self.model_path, self.initial_capital, verbose=False)
             backtester.atr_period = params['atr_period']
             backtester.atr_stop_multiplier = params['atr_stop_multiplier']
             backtester.atr_profit_multiplier = params['atr_profit_multiplier']
@@ -883,7 +1016,8 @@ class ParameterOptimizer:
                 test_data, 
                 n_steps=100,
                 start_date=None,  # Already filtered above
-                debug_mode=False
+                debug_mode=False,
+                generate_plots=False  # Disable plotting during optimization
             )
             
             closed_trades = [t for t in backtester.trades if t['status'] == 'CLOSED']
@@ -1214,7 +1348,7 @@ def main():
             print(f"📊 Using full historical dataset: {data_start_date.strftime('%Y-%m-%d')} to {data_end_date.strftime('%Y-%m-%d')}")
             
             backtester = Backtester(
-                model_path='models/unified_price_regressor.pkl',
+                model_path='models/best_model_20250703_105700.onnx',
                 initial_capital=1000
             )
             
@@ -1257,7 +1391,7 @@ def main():
             
             optimizer = ParameterOptimizer(
                 data=data,
-                model_path='models/unified_price_regressor.pkl',
+                model_path='models/best_model_20250703_105700.onnx',
                 initial_capital=1000
             )
             
