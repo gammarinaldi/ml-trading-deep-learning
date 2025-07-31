@@ -7,7 +7,7 @@ This project features a comprehensive machine learning framework for market pred
 **Original**: Random Forest with basic preprocessing  
 **Current**: **Advanced Deep Learning Ensemble** with comprehensive backtesting and parameter optimization
 
-## 🎯 Key Achievements
+## 🎯 Key Features
 
 - **Deep Learning Ensemble**: Multiple neural network architectures (Transformer, LSTM, CNN)
 - **Advanced Backtesting**: Complete trading system with parameter optimization
