@@ -1,6 +1,6 @@
 # Advanced Forex Prediction Models for MetaTrader 5
 
-This project features a comprehensive machine learning framework for forex price prediction, combining traditional ML, deep learning, and advanced backtesting with GPU acceleration and sophisticated technical analysis.
+This project features a comprehensive machine learning framework for market prediction (bullish/bearish), combining traditional ML, deep learning, and advanced backtesting with GPU acceleration and sophisticated technical analysis.
 
 ## 🚀 Project Evolution
 
