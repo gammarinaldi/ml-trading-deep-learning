@@ -10,6 +10,11 @@ import glob
 import onnxruntime as ort
 import argparse
 
+# ========== SHARED FEATURE-ENGINEERING CONSTANTS ==========
+# Must match market_direction_deep_learning.py exactly.
+VOL_REGIME_WINDOW = 250        # ~10 trading days of H1 bars
+VOL_REGIME_MIN_PERIODS = 50    # Avoid NaN until enough history is available
+
 def find_latest_model():
     """
     Find the latest trained ensemble model
@@ -187,9 +192,11 @@ def add_advanced_multi_timeframe_features(df, price_col='close'):
         df['dow_cos'] = np.cos(2 * np.pi * df['dayofweek'] / 7)
     
     # 10. REGIME CHANGE DETECTION
-    # Volatility regime changes
+    # Volatility regime changes. Trailing quantile only - a full-series quantile
+    # would leak future data into every row (look-ahead bias).
     vol_20 = df['volatility_20']
-    df['vol_regime_change'] = (vol_20 > vol_20.quantile(0.8)).astype(int)
+    vol_20_threshold = vol_20.rolling(window=VOL_REGIME_WINDOW, min_periods=VOL_REGIME_MIN_PERIODS).quantile(0.8)
+    df['vol_regime_change'] = (vol_20 > vol_20_threshold).astype(int)
     
     # Trend regime changes
     if 'trend_20_50' in df.columns:

@@ -17,6 +17,55 @@ warnings.filterwarnings('ignore')
 import itertools
 import random
 
+# ========== SHARED FEATURE-ENGINEERING CONSTANTS ==========
+# Must match market_direction_deep_learning.py exactly so that features computed
+# at backtest/inference time are identical to those the model was trained on.
+VOL_REGIME_WINDOW = 250        # ~10 trading days of H1 bars
+VOL_REGIME_MIN_PERIODS = 50    # Avoid NaN until enough history is available
+EMBARGO_BARS = 100             # Purge window >= sequence length to stop label leakage
+
+# Set by Backtester when the fitted training scaler is available.
+# When None, features are used raw (the historical behaviour).
+FEATURE_SCALER = None
+
+def apply_feature_scaler(features, n_steps, scaler=None):
+    """
+    Apply the training-time standard scaler to a flattened feature window.
+
+    Training standardises the flattened window, so the fitted statistics have
+    length n_steps * n_features (100 * 113 = 11,300 for this model) - one mean and
+    one scale per (timestep, feature) position, not per feature. If inference skips
+    this step the network receives inputs on a completely different scale, which
+    silently destroys prediction quality.
+
+    `features` may be shaped (n_steps, n_features) or already flat; the output is
+    always a flat (1, n_steps * n_features) float32 row.
+    """
+    scaler = scaler if scaler is not None else FEATURE_SCALER
+    flat = np.asarray(features, dtype=np.float32).reshape(1, -1)
+    if scaler is None:
+        return flat
+
+    mean = np.asarray(getattr(scaler, 'mean_', None), dtype=np.float32).ravel()
+    scale = np.asarray(getattr(scaler, 'scale_', None), dtype=np.float32).ravel()
+    if mean.size == 0 or scale.size == 0:
+        return flat
+    if mean.size != flat.shape[1]:
+        raise ValueError(
+            f"Scaler length {mean.size} does not match flattened input width "
+            f"{flat.shape[1]}. The feature set or sequence length changed since training."
+        )
+    scale = np.where(scale == 0, 1.0, scale)
+    return ((flat - mean) / scale).astype(np.float32)
+
+
+class SimpleScaler:
+    """Minimal standard scaler reconstructed from persisted mean/scale arrays."""
+
+    def __init__(self, mean_, scale_):
+        self.mean_ = mean_
+        self.scale_ = np.where(np.asarray(scale_, dtype=np.float32) == 0, 1.0, scale_)
+
 class Backtester:
     """
     Minimal backtesting system to identify and fix the signal generation issue
@@ -38,8 +87,66 @@ class Backtester:
         self.atr_stop_multiplier = 2.0 # Increase stop loss distance (was 1.5)
         self.atr_profit_multiplier = 4.0 # Increase take profit distance (was 3.0)
         
+        # Fitted training scaler, required to reproduce training-time inputs
+        self.feature_scaler = self.load_feature_scaler(model_path)
+        
+        # Prefix for output plot filenames, so default and optimised runs
+        # write to distinct files.
+        self.plot_prefix = "default_system"
+        
         self.trades = []
         self.equity_curve = []
+    
+    def load_feature_scaler(self, model_path):
+        """
+        Load the standard scaler that was fitted during training.
+
+        The ONNX graph contains the network weights only - feature standardisation
+        happens outside the graph. Without this scaler the backtest would feed the
+        network unnormalised inputs, so the loader is not optional.
+        """
+        # Preferred source: the metadata JSON, which stores plain mean/scale arrays
+        # and therefore needs no torch pickle deserialisation.
+        info = (self.model or {}).get('info') or {}
+        mean = info.get('scaler_mean')
+        scale = info.get('scaler_scale')
+        expected = None
+        if info.get('n_steps') and info.get('n_features'):
+            expected = int(info['n_steps']) * int(info['n_features'])
+        if mean is not None and scale is not None:
+            scaler = SimpleScaler(np.asarray(mean, dtype=np.float32),
+                                  np.asarray(scale, dtype=np.float32))
+            if self.verbose_loading:
+                print(f"Feature scaler loaded from model metadata "
+                      f"({scaler.mean_.size} values{'' if expected is None else f', expected {expected}'})")
+            if expected is not None and scaler.mean_.size != expected:
+                print(f"WARNING: scaler length {scaler.mean_.size} != expected {expected}; "
+                      f"features and sequence length may have changed since training.")
+            return scaler
+        
+        # Fallback: the pickled ensemble bundle
+        candidates = [
+            model_path.replace('.onnx', '.pkl').replace('best_model_', 'ensemble_model_'),
+            model_path.replace('.onnx', '.pkl'),
+        ]
+        for candidate in candidates:
+            if not os.path.exists(candidate):
+                continue
+            try:
+                import torch
+                payload = torch.load(candidate, map_location='cpu', weights_only=False)
+                scaler = payload.get('scaler_X') if isinstance(payload, dict) else None
+                if scaler is not None:
+                    if self.verbose_loading:
+                        print(f"Feature scaler loaded from {os.path.basename(candidate)}")
+                    return scaler
+            except Exception as exc:
+                if self.verbose_loading:
+                    print(f"Could not load scaler from {os.path.basename(candidate)}: {exc}")
+        
+        if self.verbose_loading:
+            print("WARNING: no fitted feature scaler found - features will be used unscaled")
+        return None
         
     def load_model(self, model_path):
         if os.path.exists(model_path):
@@ -227,9 +334,12 @@ class Backtester:
                 df['dow_cos'] = np.cos(2 * np.pi * df['dayofweek'] / 7)
             
             # 10. REGIME CHANGE DETECTION
-            # Volatility regime changes
+            # Volatility regime changes.
+            # IMPORTANT: trailing quantile only - a full-series quantile would leak
+            # future data into every row (look-ahead bias).
             vol_20 = df['volatility_20']
-            df['vol_regime_change'] = (vol_20 > vol_20.quantile(0.8)).astype(int)
+            vol_20_threshold = vol_20.rolling(window=VOL_REGIME_WINDOW, min_periods=VOL_REGIME_MIN_PERIODS).quantile(0.8)
+            df['vol_regime_change'] = (vol_20 > vol_20_threshold).astype(int)
             
             # Trend regime changes
             if 'trend_20_50' in df.columns:
@@ -253,13 +363,17 @@ class Backtester:
             return None, None, 0.0
         
         try:
-            # Get the last n_steps of features
-            features = recent_data[feature_cols].iloc[-n_steps:].values.flatten()
-            features = features.reshape(1, -1).astype(np.float32)
+            # Get the last n_steps of features as (n_steps, n_features)
+            window = recent_data[feature_cols].iloc[-n_steps:].values.astype(np.float32)
             
-            # Check for NaN values
-            if np.isnan(features).any():
+            # Check for NaN values before scaling
+            if np.isnan(window).any():
                 return None, None, 0.0
+            
+            # Apply the SAME standardisation used during training, then flatten.
+            # Training scaled the flattened window (one mean/scale per position),
+            # so the flattened vector must be scaled - not the raw feature columns.
+            features = apply_feature_scaler(window, n_steps, getattr(self, 'feature_scaler', None))
             
             # Make prediction with ONNX
             session = self.model['session']
@@ -926,9 +1040,11 @@ Period: {metrics.get('years', 0):.2f} years
             print(f"Max Consecutive Wins: {consecutive_stats['max_consecutive_wins']}")
             print(f"Max Consecutive Losses: {consecutive_stats['max_consecutive_losses']}")
         
-        # Generate performance plots with updated metrics (only if requested)
+        # Generate performance plots with updated metrics (only if requested).
+        # The prefix is configurable so that an optimised run no longer overwrites
+        # the default run's images (which previously produced identical files).
         if len(self.equity_curve) > 0 and generate_plots:
-            self.plot_performance_analysis(self.equity_curve, self.trades, "default_system")
+            self.plot_performance_analysis(self.equity_curve, self.trades, self.plot_prefix)
         
         return account_balance, len(closed_trades)
 
@@ -942,6 +1058,10 @@ class ParameterOptimizer:
         self.model_path = model_path
         self.initial_capital = initial_capital
         self.results = []
+        
+        # Reserve the final 12 months as a genuine out-of-sample holdout.
+        # Parameters are searched on everything before holdout_start.
+        self.holdout_start = data.index[-1] - pd.DateOffset(months=12)
         
     def define_parameter_space(self):
         """Define the parameter ranges to optimize"""
@@ -1004,13 +1124,11 @@ class ParameterOptimizer:
             backtester.min_confidence = params['min_confidence']
             backtester.max_position_size = params['max_position_size']
             
-            # Run backtest on subset for optimization (faster)
+            # Run backtest on the IN-SAMPLE window only. The final 12 months are
+            # held back as a genuine out-of-sample set (see holdout_start).
             test_data = self.data.copy()
             if test_subset:
-                # Use last 12 months for optimization testing (dynamic calculation)
-                data_end_date = self.data.index[-1]
-                twelve_months_ago = data_end_date - pd.DateOffset(months=12)
-                test_data = test_data[test_data.index >= twelve_months_ago]
+                test_data = test_data[test_data.index < self.holdout_start]
             
             final_balance, trade_count = backtester.run_backtest(
                 test_data, 
@@ -1049,12 +1167,15 @@ class ParameterOptimizer:
         """
         Run parameter optimization using grid search with sampling
         """
-        print("🔧 Starting parameter optimization...")
+        print("Starting parameter optimization...")
         
-        # Display optimization subset period
-        data_end_date = self.data.index[-1]
-        twelve_months_ago = data_end_date - pd.DateOffset(months=12)
-        print(f"📊 Optimization subset: {twelve_months_ago.strftime('%Y-%m-%d')} to {data_end_date.strftime('%Y-%m-%d')} (last 12 months)")
+        # Parameters are tuned on the in-sample window only; the held-out period is
+        # reserved for validate_best_parameters(). Tuning and reporting on the same
+        # window would make the reported performance optimistically biased.
+        print(f"Optimization (in-sample) window: {self.data.index[0].strftime('%Y-%m-%d')} "
+              f"to {self.holdout_start.strftime('%Y-%m-%d')}")
+        print(f"Holdout (out-of-sample) window: {self.holdout_start.strftime('%Y-%m-%d')} "
+              f"to {self.data.index[-1].strftime('%Y-%m-%d')}")
         
         param_space = self.define_parameter_space()
         
@@ -1116,11 +1237,16 @@ class ParameterOptimizer:
         
         return best_results[0]['params']  # Return best parameters
     
-    def validate_best_parameters(self, best_params):
+    def validate_best_parameters(self, best_params, use_holdout=True):
         """
-        Validate best parameters on full dataset
+        Validate the tuned parameters on data the search never saw.
+
+        When use_holdout is True (default) the final 12 months are used, which is
+        the honest estimate of out-of-sample behaviour. Passing False reproduces
+        the old in-sample reporting and should not be quoted as a result.
         """
-        print(f"\n🧪 VALIDATING BEST PARAMETERS ON FULL DATASET...")
+        window_label = "OUT-OF-SAMPLE HOLDOUT" if use_holdout else "FULL DATASET (in-sample, optimistic)"
+        print(f"\nVALIDATING BEST PARAMETERS ON {window_label}...")
         print("=" * 60)
         
         # Run full backtest with best parameters
@@ -1130,20 +1256,26 @@ class ParameterOptimizer:
         backtester.atr_profit_multiplier = best_params['atr_profit_multiplier']
         backtester.min_confidence = best_params['min_confidence']
         backtester.max_position_size = best_params['max_position_size']
+        backtester.plot_prefix = "optimized_system"
         
-        print(f"🔧 OPTIMIZED PARAMETERS:")
-        print(f"  📊 ATR Period: {best_params['atr_period']} periods")
-        print(f"  🛡️ Stop Loss: ATR × {best_params['atr_stop_multiplier']}")
-        print(f"  🎯 Take Profit: ATR × {best_params['atr_profit_multiplier']}")
-        print(f"  💰 Min Confidence: {best_params['min_confidence']:.4f}")
-        print(f"  📏 Position Size: {best_params['max_position_size']*100:.1f}%")
+        print(f"OPTIMIZED PARAMETERS:")
+        print(f"  ATR Period: {best_params['atr_period']} periods")
+        print(f"  Stop Loss: ATR x {best_params['atr_stop_multiplier']}")
+        print(f"  Take Profit: ATR x {best_params['atr_profit_multiplier']}")
+        print(f"  Min Confidence: {best_params['min_confidence']:.4f}")
+        print(f"  Position Size: {best_params['max_position_size']*100:.1f}%")
         
-        # Run full validation backtest using complete dataset
+        validation_data = self.data[self.data.index >= self.holdout_start] if use_holdout else self.data
+        
+        # Run validation backtest.
+        # generate_plots=False: plotting is done explicitly below so the run
+        # produces exactly one set of output images.
         final_balance, trade_count = backtester.run_backtest(
-            self.data, 
+            validation_data, 
             n_steps=100,
-            start_date=None,  # Use full dataset from CSV
-            debug_mode=False
+            start_date=None,  # Already filtered above
+            debug_mode=False,
+            generate_plots=False
         )
         
         if trade_count > 0:

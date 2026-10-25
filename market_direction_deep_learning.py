@@ -36,6 +36,14 @@ torch.manual_seed(42)
 np.random.seed(42)
 random.seed(42)
 
+# ========== SHARED FEATURE-ENGINEERING CONSTANTS ==========
+# These values define the rolling (trailing) windows used by the regime-detection
+# features. They must stay identical between training, backtesting and inference,
+# otherwise the model receives differently-scaled inputs at serve time.
+VOL_REGIME_WINDOW = 250        # ~10 trading days of H1 bars
+VOL_REGIME_MIN_PERIODS = 50    # Avoid NaN until enough history is available
+EMBARGO_BARS = 100             # Purge window >= sequence length to stop label leakage
+
 # Enable mixed precision training for RTX 3060
 from torch.cuda.amp import autocast, GradScaler
 use_amp = torch.cuda.is_available()  # Automatic Mixed Precision
@@ -1201,6 +1209,12 @@ def create_comprehensive_model_info(ensemble, validation_accuracies, validation_
         # Scalers information
         'scaler_X_fitted': scalers.get('scaler_X') is not None,
         'scaler_returns_fitted': scalers.get('scaler_returns') is not None,
+        # Persist the fitted statistics themselves so that inference code can
+        # reproduce training-time feature standardisation without unpickling.
+        'scaler_mean': (np.asarray(scalers['scaler_X'].mean_, dtype=float).tolist()
+                        if scalers.get('scaler_X') is not None else None),
+        'scaler_scale': (np.asarray(scalers['scaler_X'].scale_, dtype=float).tolist()
+                         if scalers.get('scaler_X') is not None else None),
         
         # Training configuration
         'use_amp': use_amp,
@@ -1217,10 +1231,13 @@ def create_comprehensive_model_info(ensemble, validation_accuracies, validation_
         'supports_confidence_filtering': True,
         'supports_onnx_export': True,
         
-        # Performance benchmarks
-        'beats_random_forest': direction_accuracy > 0.425,
-        'accuracy_improvement_vs_baseline': float(direction_accuracy - 0.425),
-        'accuracy_improvement_percentage': float((direction_accuracy - 0.425) * 100),
+        # Performance benchmarks.
+        # A hardcoded 0.425 "Random Forest baseline" was previously used here, but
+        # no Random Forest model exists in this repository, so that comparison was
+        # fabricated. Baseline fields are left None until a real baseline is trained.
+        'beats_random_forest': None,
+        'accuracy_improvement_vs_baseline': None,
+        'accuracy_improvement_percentage': None,
         
         # Creation metadata
         'created_at': time.strftime('%Y-%m-%d %H:%M:%S'),
@@ -1879,12 +1896,19 @@ def main():
     feature_cols = [col for col in data_with_labels.columns 
                     if col not in ['close', 'direction']]
 
-    # Split data
+    # Split data.
+    # An embargo/purge gap of EMBARGO_BARS is removed between the training and test
+    # blocks. Without it, the first `n_steps` test sequences are built from windows
+    # that overlap the end of the training set, which leaks training-period prices
+    # into the evaluation and inflates the reported accuracy.
     split_idx = int(len(data_with_labels) * 0.70)
-    train_data = data_with_labels.iloc[:split_idx]
-    test_data = data_with_labels.iloc[split_idx:]
+    train_end = split_idx
+    test_start = split_idx + EMBARGO_BARS
+    train_data = data_with_labels.iloc[:train_end]
+    test_data = data_with_labels.iloc[test_start:]
 
-    print(f"📊 Split: {len(train_data):,} train, {len(test_data):,} test")
+    print(f"Split: {len(train_data):,} train, {len(test_data):,} test "
+          f"({EMBARGO_BARS}-bar embargo between them)")
 
     # Create sequences with IMPROVED returns-based price targets
     print("\n📦 Step 3/5: Creating sequences...")
@@ -2189,23 +2213,22 @@ def main():
     
     # Final summary
     best_accuracy = max(validation_accuracies)
-    rf_baseline = 0.425
-    beat_baseline = best_accuracy > rf_baseline
-    accuracy_gap = best_accuracy - rf_baseline
+    # Honest baseline: predict the majority class of the test set. This replaces a
+    # hardcoded "Random Forest 42.5%" constant that was never measured in this repo.
+    majority_rate = float(np.mean(y_test_direction)) if len(y_test_direction) else 0.5
+    baseline_accuracy = max(majority_rate, 1 - majority_rate)
+    accuracy_gap = direction_accuracy - baseline_accuracy
     
-    print(f"\n📊 Final Results:")
+    print(f"\nFinal Results:")
     print(f"  Ensemble: {direction_accuracy*100:.2f}% | Best Individual: {best_accuracy*100:.2f}% ({best_model_type})")
-    print(f"  Random Forest Baseline: {rf_baseline*100:.1f}%")
-    if beat_baseline:
-        print(f"  ✅ BEATS BASELINE by {accuracy_gap*100:+.2f}%! 🎉")
-    else:
-        print(f"  Gap to baseline: {accuracy_gap*100:+.2f}%")
+    print(f"  Majority-class baseline: {baseline_accuracy*100:.2f}%")
+    print(f"  Edge over baseline: {accuracy_gap*100:+.2f} pp")
     print(f"  Times: train={training_time:.0f}s, inference={inference_time:.1f}s")
     
-    if beat_baseline:
-        print(f"\n🎉 BREAKTHROUGH: Deep learning beats Random Forest on forex!")
+    if accuracy_gap > 0:
+        print(f"\nModel outperforms the majority-class baseline by {accuracy_gap*100:.2f} pp.")
     else:
-        print(f"\n⚡ Close: Only {abs(accuracy_gap)*100:.1f}% from beating Random Forest")
+        print(f"\nModel does NOT beat the majority-class baseline on this split.")
     
     print(f"\n📁 Model Files Created:")
     if save_results:
@@ -2346,9 +2369,12 @@ def add_advanced_multi_timeframe_features(df, price_col='close'):
         df['dow_cos'] = np.cos(2 * np.pi * df['dayofweek'] / 7)
     
     # 10. REGIME CHANGE DETECTION
-    # Volatility regime changes
+    # Volatility regime changes.
+    # IMPORTANT: use a TRAILING quantile. A full-series .quantile(0.8) would leak
+    # future information into every row (look-ahead bias) and inflate results.
     vol_20 = df['volatility_20']
-    df['vol_regime_change'] = (vol_20 > vol_20.quantile(0.8)).astype(int)
+    vol_20_threshold = vol_20.rolling(window=VOL_REGIME_WINDOW, min_periods=VOL_REGIME_MIN_PERIODS).quantile(0.8)
+    df['vol_regime_change'] = (vol_20 > vol_20_threshold).astype(int)
     
     # Trend regime changes
     if 'trend_20_50' in df.columns:
